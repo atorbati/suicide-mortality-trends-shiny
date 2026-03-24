@@ -1,0 +1,182 @@
+---
+title: "Initial Data Exploration & Cleaning Plan"
+author: "Abigail Torbatian - ATORBATI"
+date: "JAN 27 2026"
+output: pdf_document
+---
+```{r}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(knitr)
+
+file_path <- "/Users/user/Downloads/Death_rates_for_suicide__by_sex__race__Hispanic_origin__and_age__United_States (1).csv"
+
+suicide <- read_csv(file_path, show_col_types = FALSE)
+
+#ok the name is not great i know but its kinda the topic of the study...
+#if you want me to change it let me know i can do it
+dim(suicide)
+head(suicide, 10)
+#just checking if it prints
+```
+so it works! YAY!
+onto the next...
+I need to check column types aka make a data dictionary
+```{r}
+# Column types in a compact table
+type_table <- tibble(
+  column = names(suicide),
+  class  = sapply(suicide, function(x) paste(class(x), collapse = ", "))
+)
+
+kable(type_table, caption = "Column types (as read into R)")
+
+#okay so I realize that age is cat
+#ugh I think I need to do something about age...
+```
+
+```{r}
+#now i can do data quality checking
+missing_by_col <- suicide %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(cols = everything(), names_to = "column", values_to = "n_missing") %>%
+  arrange(desc(n_missing))
+
+kable(missing_by_col, caption = "Missing values by column")
+#okay so there is a LOT of missing values in flag and estimate
+```
+
+```{r}
+#and here is the duplicates
+n_total <- nrow(suicide)
+n_dup_rows <- sum(duplicated(suicide))
+dup_pct <- round(100 * n_dup_rows / n_total, 2)
+
+data.frame(
+  total_rows = n_total,
+  duplicate_rows = n_dup_rows,
+  duplicate_percent = dup_pct
+) %>% kable(caption = "Duplicate row check")
+#okay nice no duplicates at least so i dont need to do mutate or whatever its called to deal with duplicates...
+```
+
+```{r}
+#now i am doing format checks
+#im only showing some values so its not like a lot all at once
+format_summary <- list(
+  INDICATOR_unique_n = n_distinct(suicide$INDICATOR),
+  UNIT_unique_n      = n_distinct(suicide$UNIT),
+  STUB_NAME_unique_n = n_distinct(suicide$STUB_NAME),
+  AGE_unique_n       = n_distinct(suicide$AGE),
+  FLAG_unique_n      = n_distinct(suicide$FLAG)
+)
+
+format_summary
+
+```
+
+```{r}
+#now im doing summary stats for at least 5 numeric variables 
+# first step Identify 
+num_cols <- suicide %>%
+  select(where(is.numeric)) %>%
+  names()
+
+num_cols
+
+```
+
+```{r}
+#second step choose my 5 numerical variables...
+#okay so AGE is categorical (ranges like 15–24 years, 25-30 etc etc). I will keep AGE as a factor and use AGE_NUM as an ordering key for plotting... still might need to do something later along for that
+#also - before i start writing code I need to state that ESTIMATE is the main numerical measurement (the actual suicide rate) and the other numeric columns are ordering aka keys not actually continuous variables so I do not know if this dataset works for this project? Please let me know before or after class - even via email works too. 
+num_cols <- names(suicide)[sapply(suicide, is.numeric)]
+length(num_cols)
+num_cols
+
+
+```
+
+```{r}
+vars_to_summarize <- c("ESTIMATE", "YEAR", "AGE_NUM", "STUB_LABEL_NUM", "STUB_NAME_NUM")
+
+summary_stats <- suicide %>%
+  summarise(across(all_of(vars_to_summarize),
+                   list(
+                     min  = ~ min(., na.rm = TRUE),
+                     max  = ~ max(., na.rm = TRUE),
+                     mean = ~ mean(., na.rm = TRUE),
+                     sd   = ~ sd(., na.rm = TRUE)
+                   ),
+                   .names = "{.col}__{.fn}")) %>%
+  pivot_longer(cols = everything(),
+               names_to = "metric",
+               values_to = "value") %>%
+  separate(metric, into = c("variable", "stat"), sep = "__") %>%
+  pivot_wider(names_from = stat, values_from = value) %>%
+  select(variable, min, max, mean, sd)
+
+kable(summary_stats, digits = 3, caption = "Summary statistics for 5 numeric variables")
+
+```
+
+```{r}
+#histogram for estimate
+ggplot(suicide, aes(x = ESTIMATE)) +
+  geom_histogram(bins = 30) +
+  labs(
+    title = "Histogram of ESTIMATE",
+    x = "ESTIMATE",
+    y = "Count"
+  )
+
+```
+
+```{r}
+#now i am using IQR so i can see my outliers
+iqr_outlier_count <- function(x) {
+  x <- x[!is.na(x)]
+  if (length(x) < 4) return(NA_integer_)
+  q1 <- quantile(x, 0.25)
+  q3 <- quantile(x, 0.75)
+  iqr <- q3 - q1
+  lower <- q1 - 1.5 * iqr
+  upper <- q3 + 1.5 * iqr
+  sum(x < lower | x > upper)
+}
+
+outlier_table <- suicide %>%
+  summarise(across(all_of(vars_to_summarize), ~ iqr_outlier_count(.))) %>%
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "n_outliers") %>%
+  arrange(desc(n_outliers))
+
+kable(outlier_table, caption = "Potential outliers (IQR rule) for selected numeric variables")
+
+```
+
+okay so TLDR for cleaning steps
+1. I need to do consistency checks
+Indicator has only 1 unique value so I am good on that end
+Unit has 2 unique values so I need to check and see what those are exactly and decide which I choose (do I filter or do I combine into a single unit?) so I don't cause an issue mixing and matching down the line. 
+
+2. I need to treat coded numeric columns as keys not actual numerical values
+Looking at AGE and AGE_NUM because even though you would think age is numerical but its grouped so that is fun. I might try and turn it into a numerical variable somehow, but I do not know if that is seen as a faux pas with research findings. This won't be published or peer reviewed so I personally do not see a huge issue with it. 
+Also same issue with STUB_NAME_NUM and STUB_LABEL_NUM they are just grouping codes not really continuous variables. I don't know right now how I should tackle that so I might reach out during office hours on how to tackle this for next week. 
+
+3. Redundancy issues(?)
+YEAR and YEAR_NUM are kinda the same thing(?) I plan on just dropping YEAR_NUM and only using YEAR. 
+
+4. Handle missing values(?) 
+Okay so ESTIMATE (906) has a lot of missing values and so does FLAG (5484) but I do not know if that is on purpose? It seems like a very large number of missing values - I might need to reach out to the professor and see if I should just get a different dataset and start all over or how to tackle this. If I must, I can just exclude rows with missing ESTIMATE as it is an outcome variable. 
+
+5. Duplicates (not really an issue...)
+No duplicates (yay?) which kinda makes my job a bit easier at least. 
+
+6. Outliers
+I do not know if Outliers are something I should remove as YEAR could be construed as more reports are being made now with less stigma around mental health and ESTIMATE would be also linked with this rhetoric as well (back in the 1950's suicide wasn't as reported or addressed clinically) I do not want to remove estimates for these two variables just in case. I will make sure the values I filter out are actually mismatched or missing values...
+
+7. Find out what I can use to answer my research questions...
+I still need to find out how I am going to use these variables to answer the questions I came up with earlier and create a proper dataset. 
+

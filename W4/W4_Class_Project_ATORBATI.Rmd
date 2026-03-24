@@ -1,0 +1,268 @@
+---
+title: "W4 - Data Cleaning"
+author: "atorbati"
+date: "2026-02-02"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+## 1) Project topic and dataset description
+
+This project examines longitudinal trends in U.S. suicide mortality rates and how rates differ by demographic group (sex, race/ethnicity, age) using national-level rate estimates.
+
+Each row represents one national estimate of the suicide death rate per 100,000 resident population for a specific year, age group, and demographic subgroup defined by the stratification fields (`STUB_NAME` + `STUB_LABEL`). The `FLAG` field indicates N/A (ellipses) or unreliable estimates (asterisk, often due to small counts).
+
+## 2) Read data
+
+```{r read-data}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(knitr)
+library(stringr)
+
+file_path <- "/Users/user/Downloads/Death_rates_for_suicide__by_sex__race__Hispanic_origin__and_age__United_States (1).csv"
+# If you prefer not to hardcode paths, comment above and use:
+# file_path <- file.choose()
+
+stopifnot(file.exists(file_path))
+
+suicide_raw <- read_csv(file_path, show_col_types = FALSE)
+
+# small, safe previews (do NOT print whole data)
+dim(suicide_raw)
+head(suicide_raw, 8)
+```
+
+## 3) Prioritize variables for research (minimum 10 variables)
+
+Your questions focus on:
+- Time: YEAR
+- Age groups: AGE (categorical) + AGE_NUM (ordering code)
+- Demographic stratification: STUB_NAME / STUB_LABEL (and their numeric codes)
+- Outcome: ESTIMATE (rate)
+- Data quality: FLAG
+
+To meet the requirement (≥10 variables; ≥6 numeric; ≥2 categorical), I will keep exactly 10 variables:
+- Numeric (6): UNIT_NUM, STUB_NAME_NUM, STUB_LABEL_NUM, YEAR, AGE_NUM, ESTIMATE
+- Categorical (4): STUB_NAME, STUB_LABEL, AGE, FLAG
+
+Before cleaning, I also check unit consistency and basic structure.
+
+```{r structure-checks}
+# column types
+type_table <- tibble(
+  column = names(suicide_raw),
+  class  = sapply(suicide_raw, function(x) paste(class(x), collapse = ", "))
+)
+kable(type_table, caption = "Column types (raw data)")
+
+# key data quality checks
+data.frame(
+  total_rows = nrow(suicide_raw),
+  duplicate_rows = sum(duplicated(suicide_raw)),
+  missing_estimate = sum(is.na(suicide_raw$ESTIMATE)),
+  missing_flag = sum(is.na(suicide_raw$FLAG))
+) %>% kable(caption = "Quality checks (raw data)")
+```
+
+## 4) Clean your data
+
+### 4.1 Units: prevent mixing incompatible measurements
+
+Some datasets include multiple units (e.g., crude vs age-adjusted). I will choose one unit and filter to it.
+
+```{r unit-values}
+unit_values <- sort(unique(suicide_raw$UNIT))
+unit_values
+```
+
+```{r choose-unit}
+# Prefer an age-adjusted "Deaths per 100,000" unit if present; otherwise keep the first unit.
+unit_to_keep <- unit_values[
+  which(str_detect(tolower(unit_values), "death") &
+        str_detect(tolower(unit_values), "100,000"))
+][1]
+
+if (is.na(unit_to_keep)) {
+  unit_to_keep <- unit_values[1]
+}
+
+unit_to_keep
+```
+
+### 4.2 YEAR vs YEAR_NUM redundancy
+
+If YEAR and YEAR_NUM match exactly, YEAR_NUM is redundant.
+
+```{r year-redundancy-check}
+year_matches <- all(suicide_raw$YEAR == suicide_raw$YEAR_NUM, na.rm = TRUE)
+year_matches
+```
+
+### 4.3 Apply cleaning rules
+
+Cleaning actions:
+1. Filter to one unit (UNIT == unit_to_keep)
+2. Remove exact duplicates (distinct())
+3. Remove rows where ESTIMATE is missing (cannot analyze missing outcomes)
+4. Remove N/A rows indicated by FLAG == "..." (not applicable)
+5. Do NOT auto-remove “outliers” for YEAR or ESTIMATE (extremes can be real; YEAR is not an outlier concept)
+6. Drop YEAR_NUM if redundant
+7. Keep the prioritized 10 variables (6 numeric + 4 categorical)
+(NOTE: understand that some of the variables are a bit repetitve - if this is an issue please communicate this with me via EMAIL and let me know if a different dataset is needed.)
+
+```{r clean-data}
+suicide_clean <- suicide_raw %>%
+  filter(UNIT == unit_to_keep) %>%
+  distinct() %>%
+  filter(!is.na(ESTIMATE)) %>%
+  filter(is.na(FLAG) | FLAG != "...") %>%
+  { if (year_matches) select(., -YEAR_NUM) else . } %>%
+  select(
+    # categorical (4)
+    STUB_NAME, STUB_LABEL, AGE, FLAG,
+    # numeric (6)
+    UNIT_NUM, STUB_NAME_NUM, STUB_LABEL_NUM, YEAR, AGE_NUM, ESTIMATE
+  )
+
+dim(suicide_clean)
+head(suicide_clean, 8)
+```
+
+### 4.4 Confirm we meet the “minimum variables” rule and types
+
+```{r confirm-variables}
+data.frame(
+  n_variables = ncol(suicide_clean),
+  n_numeric = sum(sapply(suicide_clean, is.numeric)),
+  n_categorical = sum(sapply(suicide_clean, function(x) is.character(x) || is.factor(x)))
+) %>% kable(caption = "Variable count check (cleaned data)")
+
+kable(
+  tibble(variable = names(suicide_clean),
+         class = sapply(suicide_clean, function(x) paste(class(x), collapse = ", "))),
+  caption = "Column types (cleaned data)"
+)
+```
+
+## 5) Summary statistics (cleaned data)
+
+### 5.1 Numeric summary table (≥4 numeric variables)
+
+ESTIMATE is the main outcome (rate). YEAR is time. AGE_NUM and STUB_LABEL_NUM are numeric ordering/coding variables that support sorting and subgroup structure.
+
+```{r numeric-summary}
+num_vars <- c("ESTIMATE", "YEAR", "AGE_NUM", "STUB_LABEL_NUM")
+
+numeric_summary <- suicide_clean %>%
+  summarise(across(all_of(num_vars),
+                   list(
+                     min  = ~ min(., na.rm = TRUE),
+                     max  = ~ max(., na.rm = TRUE),
+                     mean = ~ mean(., na.rm = TRUE),
+                     sd   = ~ sd(., na.rm = TRUE)
+                   ),
+                   .names = "{.col}__{.fn}")) %>%
+  pivot_longer(everything(), names_to = "metric", values_to = "value") %>%
+  separate(metric, into = c("variable","stat"), sep = "__") %>%
+  pivot_wider(names_from = stat, values_from = value) %>%
+  select(variable, min, max, mean, sd)
+
+kable(numeric_summary, digits = 3, caption = "Numeric summary statistics (cleaned data)")
+```
+
+### 5.2 Simple plot (histogram)
+
+```{r histogram-estimate}
+ggplot(suicide_clean, aes(x = ESTIMATE)) +
+  geom_histogram(bins = 30) +
+  labs(
+    title = "Histogram of ESTIMATE (cleaned data)",
+    x = "ESTIMATE (rate)",
+    y = "Count"
+  )
+```
+
+### 5.3 Categorical summaries (≥2 categorical variables)
+
+For each categorical variable, I report:
+- number of unique values
+- frequency table (top levels only as the rest aren't as significant)
+
+#### Categorical variable 1: AGE
+
+```{r cat-age}
+n_unique_age <- n_distinct(suicide_clean$AGE)
+n_unique_age
+
+age_freq <- suicide_clean %>%
+  count(AGE, sort = TRUE)
+
+kable(head(age_freq, 15), caption = "AGE frequency table (top 15)")
+```
+
+#### Categorical variable 2: STUB_LABEL
+
+```{r cat-stub-label}
+n_unique_stub <- n_distinct(suicide_clean$STUB_LABEL)
+n_unique_stub
+
+stub_freq <- suicide_clean %>%
+  count(STUB_LABEL, sort = TRUE)
+
+kable(head(stub_freq, 15), caption = "STUB_LABEL frequency table (top 15)")
+```
+
+(Additional categorical checks, not required but useful)
+
+```{r cat-stub-name}
+n_unique_stubname <- n_distinct(suicide_clean$STUB_NAME)
+n_unique_stubname
+
+stubname_freq <- suicide_clean %>%
+  count(STUB_NAME, sort = TRUE)
+
+kable(head(stubname_freq, 15), caption = "STUB_NAME frequency table (top 15)")
+```
+
+## 6) Research questions 
+
+These questions come from my initial proposal (and are still appropriate after cleaning). I refined wording slightly to match the cleaned structure (YEAR, AGE, STUB fields, ESTIMATE).
+
+1. Disparity: How do suicide death rates differ by sex and race/ethnicity, and have these disparities widened or narrowed over time?
+
+2. Age: Which age groups are the most affected by suicide, and have the highest-risk age groups changed over time?
+
+3. Sex: Are men or women more impacted by suicide, and does the sex difference persist across age groups?
+
+## 7) Planned plots for next assignment...
+
+### For Q1 (sex/race disparity over time)
+Planned plots:
+- Line chart: YEAR (x) vs ESTIMATE (y), color = subgroup label (STUB_LABEL), filtered to a specific stratification scheme (STUB_NAME) such as sex or race/ethnicity.
+- Optional: Gap-over-time plot (difference between two groups per year). (longitudinal maybe?)
+
+### For Q2 (age groups most affected and change over time)
+Planned plots:
+- Heatmap: YEAR (x) by AGE (y) with fill = ESTIMATE to detect shifting risk across decades.
+- Small-multiples line plots: ESTIMATE over time for selected age groups.
+
+### For Q3 (sex differences across age groups)
+Planned plots:
+- Facet line chart: YEAR vs ESTIMATE, color by sex subgroup, faceted by AGE (or a subset of age bands).
+- Optional: Boxplots of ESTIMATE by sex within chosen age ranges/time windows. (boxplots are great to see the IQR and visualize outliers if needed to construct an argument.)
+
+PS:
+Thank you for reading - if you have ANY questions or concerns (if my writing is not professional enough, need to reword certain sections, etc.) please contact me via email. I really care about this class and I want to get a good grade to show to my mentor that taught me R at RAND. :) I worked on a suicide research project across Pittsburgh collecting data so this is very important to me. 

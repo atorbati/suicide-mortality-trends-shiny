@@ -1,0 +1,255 @@
+---
+title: "W6-FINAL-PROJECT-ATORBATI"
+author: "atorbati"
+date: "2026-02-18"
+output: pdf_document
+---
+###############################################
+# CDC WONDER Suicide Project — Statistical Tests + Extra Figure/Test
+# Dataset: data/NEWDATASET_VER1.csv  (ICD-10 X60-X84)
+#
+# Per your instructions, each chunk is wrapped using apostrophe fences:
+#   ```{r chunk-name}```
+#   ...code...
+#   ```
+###############################################
+
+```{r libraries, message=FALSE, warning=FALSE}
+install.packages("viridis")
+library(tidyverse)
+library(knitr)
+library(viridis)
+```
+
+```{r load_and_clean}
+# ---- Load data ----
+file_path <- "data/NEWDATASET_VER1.csv"
+stopifnot(file.exists(file_path))
+
+wonder_raw <- readr::read_csv(file_path, show_col_types = FALSE)
+
+# ---- Clean names (no janitor needed) ----
+clean_names_simple <- function(nms) {
+  nms <- gsub("[^A-Za-z0-9]+", "_", nms)
+  nms <- gsub("^_+|_+$", "", nms)
+  tolower(nms)
+}
+names(wonder_raw) <- clean_names_simple(names(wonder_raw))
+
+# ---- Standardize types + reliability flag ----
+wonder <- wonder_raw %>%
+  mutate(
+    state = as.factor(state),
+    year  = as.integer(year),
+    sex   = as.factor(sex),
+    race  = as.factor(race),
+    deaths = as.numeric(deaths),
+    population = as.numeric(population),
+    crude_rate_chr = as.character(crude_rate),
+    crude_rate = suppressWarnings(as.numeric(crude_rate_chr)),
+    unreliable_rate = (tolower(crude_rate_chr) == "unreliable") | (deaths < 20)
+  )
+
+# Confirm key columns exist
+c("state","year","sex","race","deaths","population","crude_rate") %in% names(wonder)
+```
+
+```{r build_analysis_tables}
+# ---- Main analysis tables ----
+state_year <- wonder %>%
+  group_by(state, year) %>%
+  summarise(
+    deaths = sum(deaths, na.rm = TRUE),
+    population = sum(population, na.rm = TRUE),
+    rate_per_100k = 100000 * deaths / population,
+    .groups = "drop"
+  )
+
+state_year_sex <- wonder %>%
+  group_by(state, year, sex) %>%
+  summarise(
+    deaths = sum(deaths, na.rm = TRUE),
+    population = sum(population, na.rm = TRUE),
+    rate_per_100k = 100000 * deaths / population,
+    .groups = "drop"
+  ) %>%
+  filter(sex %in% c("Male", "Female"))
+
+state_year_race <- wonder %>%
+  group_by(state, year, race) %>%
+  summarise(
+    deaths = sum(deaths, na.rm = TRUE),
+    population = sum(population, na.rm = TRUE),
+    rate_per_100k = 100000 * deaths / population,
+    .groups = "drop"
+  )
+```
+
+###############################################
+# REQUIRED: Three different statistical tests (>= 2 types)
+# 1) t-test (Sex)        [Type: mean comparison]  -> RQ3
+# 2) ANOVA (Race)        [Type: mean comparison]  -> RQ3
+# 3) OLS Regression      [Type: regression]       -> RQ1/RQ2
+# Each includes: results + analysis + conclusion tied to RQs
+###############################################
+
+```{r test1_ttest_sex, results='asis'}
+# TEST 1 (RQ3): Two-sample t-test comparing mean rates by Sex
+
+# Descriptives
+sex_means <- state_year_sex %>%
+  group_by(sex) %>%
+  summarise(
+    mean_rate = mean(rate_per_100k, na.rm = TRUE),
+    sd_rate   = sd(rate_per_100k, na.rm = TRUE),
+    n         = n(),
+    .groups = "drop"
+  )
+kable(sex_means, digits = 2, caption = "Descriptives: state-year suicide rates by sex")
+
+# Test
+t_sex <- t.test(rate_per_100k ~ sex, data = state_year_sex)
+print(t_sex)
+
+# Analysis + conclusion
+cat("\n**Analysis (t-test, RQ3):** This two-sample t-test evaluates whether the mean state-year suicide mortality rate differs between males and females. A statistically significant p-value indicates evidence of a difference in average rates by sex in this dataset.\n")
+
+if (t_sex$p.value < 0.05) {
+  cat("**Conclusion (t-test, RQ3):** The test is statistically significant (p < 0.05), suggesting mean suicide mortality rates differ by sex. This is consistent with expectations that male rates are higher on average.\n")
+} else {
+  cat("**Conclusion (t-test, RQ3):** The test is not statistically significant (p >= 0.05), suggesting no detectable mean difference by sex in this aggregated state-year dataset. This could occur if aggregation masks differences or if additional controls (state/year) are required.\n")
+}
+
+cat("**Expectation check:** If results differ from expectations, likely causes include aggregation level (state-year), differences in population composition by state, and the need for models that control for state and year simultaneously.\n")
+```
+
+```{r test2_anova_race, results='asis'}
+# TEST 2 (RQ3): One-way ANOVA comparing mean rates across Race categories
+
+# Descriptives
+race_means <- state_year_race %>%
+  group_by(race) %>%
+  summarise(
+    mean_rate = mean(rate_per_100k, na.rm = TRUE),
+    sd_rate   = sd(rate_per_100k, na.rm = TRUE),
+    n         = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_rate))
+kable(race_means, digits = 2, caption = "Descriptives: state-year suicide rates by race")
+
+# ANOVA
+aov_race <- aov(rate_per_100k ~ race, data = state_year_race)
+aov_summary <- summary(aov_race)
+print(aov_summary)
+
+cat("\n**Analysis (ANOVA, RQ3):** One-way ANOVA tests whether mean state-year suicide rates differ across race categories. A significant F-test indicates that at least one race group mean differs from the others.\n")
+
+p_race <- aov_summary[[1]][["Pr(>F)"]][1]
+if (!is.na(p_race) && p_race < 0.05) {
+  cat("**Conclusion (ANOVA, RQ3):** The F-test is statistically significant (p < 0.05), providing evidence that mean suicide mortality rates differ across race categories. A post-hoc test (Tukey HSD) can identify which pairs differ.\n")
+} else {
+  cat("**Conclusion (ANOVA, RQ3):** The F-test is not statistically significant (p >= 0.05), suggesting no detectable mean differences across race categories at this aggregation level.\n")
+}
+
+cat("**Expectation check:** If results are weaker than expected, potential reasons include aggregation effects, differences in state-level demographics, and limited within-category variation after collapsing across covariates.\n")
+```
+
+```{r test2b_tukey_optional, results='asis'}
+# OPTIONAL follow-up if ANOVA is significant:
+# print(TukeyHSD(aov_race))
+```
+
+```{r test3_regression_ols, results='asis'}
+# TEST 3 (RQ1/RQ2): OLS regression with state fixed effects + linear time trend
+# DV: rate_per_100k
+# IVs: year (time trend), state (fixed effects)
+
+reg1 <- lm(rate_per_100k ~ year + state, data = state_year)
+reg1_sum <- summary(reg1)
+print(reg1_sum)
+
+beta_year <- coef(reg1_sum)["year", "Estimate"]
+p_year <- coef(reg1_sum)["year", "Pr(>|t|)"]
+
+cat("\n**Analysis (OLS regression, RQ1/RQ2):** This model estimates the association between time (year) and the suicide rate while controlling for persistent differences across states via state fixed effects. The coefficient on year is the estimated average annual change in deaths per 100,000.\n")
+
+if (!is.na(p_year) && p_year < 0.05) {
+  cat(paste0("**Conclusion (OLS regression, RQ1/RQ2):** The year coefficient is statistically significant (p < 0.05). This supports a time trend in suicide mortality rates. Estimated annual change ≈ ", round(beta_year, 4), " deaths per 100,000 per year.\n"))
+} else {
+  cat("**Conclusion (OLS regression, RQ1/RQ2):** The year coefficient is not statistically significant (p >= 0.05), suggesting no clear linear time trend once state differences are controlled.\n")
+}
+
+cat("**Expectation check:** If the trend differs from expectations, reasons may include nonlinear changes over time, differing state-specific trends, or changes in the underlying population denominator.\n")
+```
+
+###############################################
+# NEXT STAGE REQUIREMENTS
+# 1) One additional figure + analysis (NOT similar to existing plots)
+# 2) One additional statistical test + analysis (NOT similar to prior tests)
+###############################################
+
+```{r extra_figure_state_slopes}
+# ADDITIONAL FIGURE (NEW): State-specific slopes (who is increasing fastest?)
+# Not similar to: national trend line, top-state trend lines, heatmap, boxplots
+
+state_slopes <- state_year %>%
+  group_by(state) %>%
+  filter(n() >= 5) %>%  # avoid short series
+  summarise(
+    slope = coef(lm(rate_per_100k ~ year))[2],
+    avg_rate = mean(rate_per_100k, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(slope)) %>%
+  slice_head(n = 15)
+
+ggplot(state_slopes, aes(x = reorder(state, slope), y = slope)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "States with steepest increases in suicide rates over time",
+    x = "State",
+    y = "Estimated annual change in deaths per 100,000 (slope)"
+  )
+
+# Analysis to include in narrative:
+# This figure estimates a separate linear trend within each state and ranks states by slope.
+# States with larger positive slopes are experiencing faster increases over time, which helps
+# identify where policy attention may be most needed (supports RQ2).
+```
+
+```{r extra_test_poisson_glm, results='asis'}
+# ADDITIONAL STATISTICAL TEST (NEW): Poisson regression with population offset
+# Not similar to OLS/t-test/ANOVA because:
+# - Outcome is death counts (deaths)
+# - Uses Poisson distribution and log link
+# - Offset log(population) models rates using a count framework
+#
+# RQ1/RQ2: time trend + state differences in a count model
+
+poisson_fit <- glm(
+  deaths ~ year + state,
+  family = poisson(link = "log"),
+  offset = log(population),
+  data = state_year
+)
+
+poisson_sum <- summary(poisson_fit)
+print(poisson_sum)
+
+beta_year_pois <- coef(poisson_sum)["year", "Estimate"]
+p_year_pois <- coef(poisson_sum)["year", "Pr(>|z|)"]
+irr <- exp(beta_year_pois)
+
+cat("\n**Analysis (Poisson regression, RQ1/RQ2):** Poisson regression models death counts while accounting for population exposure using an offset. exp(beta_year) is the incidence rate ratio (IRR), interpreted as the multiplicative change in expected deaths per year (holding state constant and adjusting for population).\n")
+
+if (!is.na(p_year_pois) && p_year_pois < 0.05) {
+  cat(paste0("**Conclusion (Poisson regression, RQ1/RQ2):** The year effect is statistically significant (p < 0.05). IRR ≈ ", round(irr, 4),
+             ", meaning expected deaths increase by about ", round((irr - 1) * 100, 2), "% per year (state fixed, population-adjusted).\n"))
+} else {
+  cat("**Conclusion (Poisson regression, RQ1/RQ2):** The year effect is not statistically significant (p >= 0.05), suggesting no evidence of a monotonic time trend in counts once population and state are accounted for.\n")
+}
+
+cat("**Model choice justification:** If overdispersion is present (variance >> mean), a Negative Binomial model is more appropriate than Poisson. I will check dispersion diagnostics before selecting Poisson vs Negative Binomial for the final model.\n")
+```

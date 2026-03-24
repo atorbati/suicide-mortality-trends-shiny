@@ -1,0 +1,500 @@
+---
+title: "W5_Statistical_Analysis"
+output:
+  pdf_document: default
+  html_document: default
+date: "2026-02-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The objective of today class is to learn how to perform multiple methods of statistical analysis using R. We are going to start with clusters, follow by t-test, ANOVA, and regression analysis. Remember that this is just a subset of the statistical analysis that you can use for your project. Please let me know if there is a topic you are interesting in learning and I can bring an example to class! 
+
+We are going to work with a data set on American University Data. The Integrated Postsecondary Education Data System (IPEDS) is the primary source for data on colleges, universities, and technical and vocational postsecondary institutions in the United States (data from https://public.tableau.com/app/learn/sample-data). You can find more information on National Center for Education Statistics in the following link: https://nces.ed.gov/ipeds/. 
+ 
+In this data set, each row represents a university and we have information on multiple variables such as: 
+
+\begin{itemize}
+  \item University name, zip code, state, and county 
+  \item Geographical region: states grouped by region 
+  \item Highest degree offered 
+  \item Number of Applicants, Number of Admissions, and Number of Enrolled students
+  \item SAT/ACT score information
+  \item Tuition and fees 
+  \item Control of institution (public or private) 
+  \item Enrollment by graduate and undergraduate
+  \item Percent of total enrollment by race 
+  \item Percent of undergrad enrollment by race 
+  \item Financial aid
+\end{itemize}
+
+Each row in this data set represents an academic institution and the unique identifier is the ID of the institution (not the name). 
+
+First we are going to activate the library and read the data we are going to be using: 
+
+Packages: 
+```{r, warning=FALSE, message=FALSE}
+#install.packages("kableExtra")
+library(tidyverse)
+library(ggplot2)
+library(shiny)
+library(plotly)
+library(dplyr)
+library(readxl)
+library(kableExtra)
+
+```
+
+Data: 
+
+The file we are going to use is called "IPEDS_Data.xslx". The Zip code format is a 9 digit code for some universities and a 5 digit for other institutions. I am going to clean the data for all universities to have a 5 digit Zip code. 
+
+```{r, echo=TRUE}
+ipeds=read_xlsx("IPEDS_Data.xlsx", sheet="Data")
+
+#Clean the zip code 
+ipeds=ipeds%>%
+  separate(ZIP, into="ZIP" , sep = "-", extra="drop")
+
+#extra drops any values after the - because I am only creating one column 
+```
+
+Note that in the code above, extra='drop' drops any values after the separator '-'. In this case I want to drop the information after the "-" because I am only interested in the first five digits. 
+
+
+## Analyzing the data
+
+Let's create a summary of the numerical variables: 
+
+```{r}
+#for some reason nothing is saving correctly i am so sorry 
+#Select the numeric variables 
+num_ipeds = ipeds %>%
+  select(where(is.numeric),-ID,-ZIP,-Longitude,-Latitude)
+
+# Find the mean, min, max, and median of each variable
+num_summary=num_ipeds%>%
+  summarise(across(
+    everything(), 
+    list(
+      Mean=~round(mean(.,na.rm=TRUE),2),
+      Min = ~ min(., na.rm = TRUE),
+      Max = ~ max(., na.rm = TRUE),
+      Median=~ median(.,na.rm=TRUE)
+    )
+  ))
+
+#Formatting the data
+num_summary=num_summary%>%
+  pivot_longer(
+      cols = everything(),
+     names_to = c("Variable", ".value"),
+     names_pattern = "(.+)_(Mean|Median|Min|Max)$"
+    )
+
+# Printing the summary 
+num_summary
+```
+
+Note that the format of the table below is not great for presentation. The kableExtra library, allows you to format the table. The kable_styling allows you to select different formats. 
+
+```{r}
+num_summary %>%
+  kbl(
+    caption = "Summary statistics for numeric variables",
+    booktabs = TRUE
+  ) %>%
+  kable_styling()
+
+```
+
+Now, let's create a summary of categorical variables
+
+```{r}
+
+# Select all categorical variables
+cat_ipeds = ipeds %>%
+  select(where(~is.character(.)))
+
+# Select each category (variable), count the number of unique values 
+# We also provide an example of the categories (at  most 3)
+cat_summary=cat_ipeds%>%
+  summarise(across(
+    everything(), 
+    list(
+      Categories=~n_distinct(.),
+      Example=~paste(head(unique(na.omit(.)),3),collapse=", ")
+    )
+  ))
+
+#Fix the format
+cat_summary=cat_summary%>%
+  pivot_longer(
+      cols = everything(),
+     names_to = c("Variable", ".value"),
+     names_pattern = "(.+)_(Categories|Example)$"
+    )
+
+# Nicer format
+cat_summary %>%
+  kbl(
+    caption = "Summary statistics for categorical variables",
+    booktabs = TRUE
+  ) %>%
+  kable_styling(full_width = FALSE) %>%
+  column_spec(3, width = "10cm")
+
+```
+
+column_spec(n,width= ), specified the width in cm of the nth column. 
+
+## Cluster analysis 
+
+We are going to cluster the data by SAT, Tuition 2013 and Percentage of women. We first need to create a new data frame with the variables we are going to use. It is important to create a new data frame because the cluster function requieres a table as input parameter. Remember to pick \textbf{numerical} variables. 
+
+```{r}
+
+clusterData=ipeds%>%
+  select(SAT, Tuition_2013, Women
+    
+  )
+```
+
+Now, we are going to change the name of the rows to the ID of the institution to keep track of the institution in each row and later join it to the ipeds table. 
+
+```{r}
+
+rownames(clusterData)=ipeds$ID
+```
+
+Now, we can create the clusters using the kmeans function. We are defining an object of type cluster called kclusters where we are going to save the information of the clusters. Don't forget to decide on the number of clusters (k). In this case, we are doing 3 clusters. 
+
+```{r}
+#I do not know what is going on with my code right now? 
+kclusters=kmeans(clusterData,centers=2)
+
+```
+Note that if you print the object clusters you get a lot of information. If you want to access a particular item, you can use the following available components: 
+
+- [1] cluster
+- [2] centers
+- [5] tot.withinss (for the elbow method)
+- [7] sizes of each cluster
+
+For example, if we want the sizes of each cluster we can do: 
+```{r}
+kclusters[2]
+```
+
+Now, let's plot each cluster. Each dot is an institution and each color is a cluster. 
+```{r}
+#YAY i fixed it phew
+plot(clusterData,col=kclusters$cluster)
+```
+
+### Standarizing the data
+
+If the variables you use for the clusters have different ranges, it will affect the results. Tuition has a wider range than the percentage of women and SAT percentage. Thus, tuition will have a higher weight on distance than the other two variables. To solve this, we standardize the data. 
+
+For that, we use the function scale() as below. We are also going to make sure that the resulting object is a data frame by using the function as.data.frame(). 
+```{r}
+scale_data=as.data.frame(scale(clusterData))
+```
+
+
+Now, we can repeat the analysis as we did before but this time with the scaled data. Look at the difference of the resulting clusters. 
+```{r}
+kclusters=kmeans(scale_data,centers=3)
+plot(scale_data ,col=kclusters$cluster )
+#nice colors good good easier to read and visualize clusters
+```
+Now, we want to save the information of clusters as a new column in the data frame with all the information of the institutions. We are going to use the names of the rows to create a new data frame with the ID of the institution and the cluster. We can then join it with the ipeds data. I am going to create a new data frame called ipeds_cluster with all the information of the institutions because I don't want to overwrite the ipeds data. 
+
+```{r}
+clus_final=as.data.frame(kclusters$cluster)
+clus_final=tibble(ID=row.names(clus_final) ,Cluster= as.character(clus_final))
+
+ipeds_cluster=merge(ipeds,clus_final,by="ID")
+```
+
+Now you can plot or summarize any of the variables and color the dots depending on the cluster. For example, if we want to find the average SAT, percentage of women, and tuition value for each of the clusters, we can do the following: 
+
+```{r}
+Cluster_centers=ipeds_cluster%>%
+  group_by(Cluster)%>%
+  summarise(SAT= round(mean(SAT),2),
+            Women= round(mean(Women),2) , 
+            Tuition=round(mean(Tuition_2013),2)
+              )
+
+Cluster_centers
+```
+
+Note that the previous information are the cluster centers. 
+
+You can also plot these variables with every color representing a cluster. We are going to do a 3D plot to see all the variables together. 
+
+Note that 3D plots \textbf{can not} be knitted to a PDF document. However you can use it in your Shiny App. 
+```{r, eval=FALSE}
+#woah this is super cool i want to do this for a separate project I have... saving this for later!!
+plot_ly(x=ipeds_cluster$SAT,y=ipeds_cluster$Women,
+        z=ipeds_cluster$Tuition_2013,color=ipeds_cluster$Cluster) %>%
+          add_markers() %>%
+           layout(scene = list(xaxis = list(title = 'SAT Percentage'),
+                     yaxis = list(title = 'Percentage of Women'),
+                     zaxis = list(title = 'Tuition and fees 2013')))
+
+```
+
+### Elbow method
+
+The following code creates the plot for the elbow method. We are going to change the value of k from 1 to 10, but you can adapt the code to any other range. 
+
+```{r}
+#Using the scaled data
+data=scale_data
+k.max = 10
+#Create a vector with the within sum of squarer (wss)
+wss = sapply(1:k.max, 
+              function(k){kmeans(data, k, nstart=50,iter.max = 15 )$tot.withinss})
+wss
+
+#Plot the wss vs number of iterations
+plot(1:k.max, wss,
+     type="b", pch=19, 
+     xlab="Number of clusters K",
+     ylab="Total within-clusters sum of squares", main="K-clusters")
+
+```
+
+
+
+## t-test
+
+t-tests are used to assess the difference between the difference of means (either one sample or two sample).  Remember that you reject the null hypothesis in favor of the alternative hypothesis if the p-value is less than alpha. 
+
+There are 3 types of t-test:
+
+-  One-sample t-test
+-  Independent sample t-test (pooled and non-pooled)
+-  Paired t-test
+
+
+### One sample t-test
+
+In the following t-test we are going to test if the percentage of women in the institutions is greater than 50%. 
+
+Null: $H_0: \mu_W=50\%$
+Alternative: $H_0: \mu_W>50\%$
+
+You can define the alternative in the function to be "greater", "less", or "two.sided". The default value is two sided (non equal)
+
+
+```{r}
+t.test(ipeds$Women , mu =50 , conf.level = 0.98 ,alternative ="greater" )
+```
+
+
+### Two-sample t-test
+
+Let's now compare the admissions at public and private universities. Our null hypothesis is going to be that the mean is the same, and our alternative that it is different. 
+
+Null: $H_0: \mu_{Pu}=\mu_{Pr}$
+Alternative: $\mu_{Pu}\neq\mu_{Pr}$
+
+Let's create a subset with the information of the public institutions and one subset with the data of the private institutions. 
+
+```{r}
+public=ipeds[ipeds$Control=="Public",]
+private=ipeds[ipeds$Control=="Private not-for-profit",]
+```
+
+#### Non- pooled test
+
+
+We are going to build a non-pooled test (the variance of the groups is not equal) first
+
+```{r}
+t.test(public$Admissions ,private$Admissions ,paired =FALSE  ,var.equal = FALSE,conf.level = 0.95)
+```
+
+#### Pooled test
+
+We can also build a pooled test (the variance of the groups is equal). We are going to save the information of the test in an object call "test: 
+
+```{r}
+#why is it not printing
+test=t.test(public$Admissions ,private$Admissions ,paired =FALSE ,var.equal = TRUE,conf.level = 0.95, alternative = "greater")
+```
+
+By saving the information of the test in an object (variable), we can use the object to access different results of the test and incorporate it in a report as text. The test has functions as p-value, statistic (t-statistic value), confidence interval, among others. The following code summarizes the results: 
+
+```{r}
+cat("For the test the p-value is ", as.numeric(test$p.value), ", the statistic t value is", round(test$statistic,2),"and the confidence interval is ", test$conf.int.)
+cat("The mean of the private universities is ", round(mean(private$Admissions),2), "and the mean of the public universities is ", round(mean(public$Admissions),2))
+
+```
+
+
+#### Paired test
+
+Let's now compare if the difference of the tuition from 2012 to 2013 is greater than 1000. This is a paired test because we have one data point for each year for each institution and we want to test on the difference. Our null hypothesis is going to be that the difference is 1000, and our alternative that it is greater. 
+
+Null: $H_0: \d=1000$
+Alternative: $d>1000$
+ 
+```{r}
+t.test(ipeds$Tuition_2013 ,ipeds$Tuition_2012 ,paired = TRUE ,conf.level = 0.95, alternative = "greater")
+```
+
+
+### One-way ANOVA
+
+The one-way ANOVA is a test of equality of means comparing variances. If the variance within groups is statistically smaller than the variance between groups, then, we can reject the null hypothesis and conclude that the mean of at least one group is different to the other groups. 
+ 
+Lets test if the average enrollment by region is different. 
+
+```{r}
+
+anova = aov(Enrolled ~ Geo_region, data = ipeds)
+
+summary(anova)
+
+```
+
+Geo region represent between groups and residuals is within groups. 
+
+### Regression analysis
+
+In regression analysis we want to study the relationship between two (or more) variables; a dependent variable (VOI - $y$) and one or more independent variables (predictor(s) -$x_i$)
+
+Don't forget to look at the following and conclude about your results:  
+
+- Coefficient of each independent variable and it's p-value 
+- R-square of the model 
+
+#### Simple linear regression (one independent variable and one dependent)
+
+The following simple linear regressions looks at the 4 year graduation rate (GR_4) as a function of the SAT reading 75th percentile. 
+
+```{r}
+#ah crap i missed this 
+#Simple linear regression 
+model_1 = lm(formula = GR_4 ~SAT_R75, data = ipeds)
+summary(model_1)
+
+```
+
+You can access specific information of the results as follows: 
+- $coefficients[1]: intercept 
+- $coefficients[2]: slope 
+
+```{r}
+cat("The model results show that the slope is ", round(model_1$coefficients[2],2), "and the intercept is ", round(model_1$coefficients[1],2))
+```
+
+#### Confidence interval 
+
+You can find the confidence interval of the estimates of the regression by using the following code: 
+
+```{r}
+confint(model_1, level=0.95)
+```
+
+#### Multiple linear regression (two or more independent variables and one dependent)
+
+The following linear regressions looks at the 4 year graduation rate (GR_4) as a function of the SAT reading 75th percentile and undergraduate enrollment. 
+
+```{r}
+model_2 = lm(formula=GR_4 ~ SAT_R75 + Un_enrollment , data = ipeds)
+summary(model_2)
+```
+
+You can also include categorical variables. The following linear regressions looks at the 4 year graduation rate (GR_4) as a function of the SAT reading 75th percentile and control (if the institution is public or private). 
+
+```{r}
+#ah crap i missed this... noooooo i think my headache is getting worse regardless of how much water i drink
+model_3 = lm(GR_4~ SAT_R75 +Control,  data = ipeds)
+summary(model_3)
+```
+
+Usually R takes the first category (alphabetically) as the reference category. If you want to change the reference category you can use ref=. First we have to convert the variable to a factor. The following linear regressions looks at the 4 year graduation rate (GR_4) as a function of the SAT reading 75th percentile and the highest degree offered. 
+
+Create the model:
+```{r}
+model_4 = lm(GR_4 ~ SAT_R75 + Degree ,  data = ipeds)
+summary(model_4)
+```
+
+Change the reference category to "Master's degree" and change the model: 
+
+```{r}
+ipeds$Degree=as.factor(ipeds$Degree )
+ipeds$Degree = relevel(ipeds$Degree , ref = "Master's degree" )
+model_5 = lm(GR_4 ~ SAT_R75+Degree,  data = ipeds)
+summary(model_5)
+
+```
+
+
+### Prediction
+
+You can use your models for prediction. We will use model 1 and predict the graduation rate for a school with SAT of 500.  
+
+```{r}
+predict(model_1 ,data.frame(SAT_R75=500) )
+```
+
+If you want to predict multiple values, you can create a vector with the values you want to predict. 
+```{r}
+#okay i guess we did not have enough time for this yaayyyy
+predict(model_1,newdata= data.frame(SAT_R75 = 500))
+```
+
+Lastly, you can decide if you want the prediction or the confidence interval for your values. 
+```{r}
+#Prediction interval
+predict(model_1,data.frame(SAT_R75=c(400,550,800)),interval= "confidence", level = 0.95 )
+
+#Confidence interval
+predict(model_1,data.frame(SAT_R75=c(400,550,800)),interval="prediction", level = 0.95)
+```
+
+### Additional information: Step function
+
+The step function calculates the AIC for each variables and based on that criteria, decides which variables are the best one to keep in the model. 
+
+The AIC penalizes for adding more variables to the model. The model with lower AIC is preferable. 
+
+```{r}
+#Create subset of the data with some variables
+ipeds_small=ipeds%>%
+  select(
+    Applicants,
+    Admissions, 
+    Enrolled, 
+    GR_4, 
+    SAT_R75, 
+    SAT_M75, 
+    Tuition_2014, 
+    Control, 
+    Doctorate, 
+    Num_Bachelors, 
+    Num_Doctor, 
+    Num_Master
+  )
+
+#Using ., you are telling R to include all the variables in the data
+model_2=lm(GR_4~.,data=ipeds_small)
+
+#The step function finds the "best" model using the AIC criteria
+model_3=step(model_2)
+
+```
+
+
+
+
+
